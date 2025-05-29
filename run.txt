@@ -1,0 +1,1 @@
+python q_main.py --w-num-bits 4 --a-num-bits 2
