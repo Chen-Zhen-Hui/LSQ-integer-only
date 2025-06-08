@@ -1,121 +1,130 @@
 import torch
+import torch.nn as nn
+import torch.optim as optim
 import argparse
-import os
+from torch.utils.tensorboard import SummaryWriter
 import time
-
 from datasets import get_data_loader
 from models.resnet_cifar10 import ResNet18_CIFAR10
+from models.tiny_vgg import TinyVGG
+import os
 
-def inference(args):
+def train(model, device, train_loader, optimizer, criterion):
+    model.train()
+    running_loss = 0.0
+    correct_train = 0
+    total_train_samples = 0
+    
+    start_time = time.time()
+    
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        
+        output = model.quantize_forward(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+        
+        running_loss += loss.item()
+        
+        pred_train = output.argmax(dim=1, keepdim=True)
+        correct_train += pred_train.eq(target.view_as(pred_train)).sum().item()
+        total_train_samples += data.size(0)
+            
+    end_time = time.time()
+    epoch_duration = end_time - start_time
+    samples_per_second = total_train_samples / epoch_duration if epoch_duration > 0 else 0
+    
+    avg_loss = running_loss / len(train_loader)
+    train_accuracy = 100. * correct_train / total_train_samples if total_train_samples > 0 else 0
+    
+    return avg_loss, train_accuracy, samples_per_second
+
+def q_inference(model, device, test_loader, criterion):
+    model.eval()
+    test_loss_sum = 0
+    correct = 0
+    total_test_samples = 0
+    
+    start_time = time.time()
+    
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            total_test_samples += data.size(0)
+            output = model.quantize_inference_integer(data)
+            loss = criterion(output, target)
+            test_loss_sum += loss.item() * data.size(0)
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+
+    end_time = time.time()
+    test_duration = end_time - start_time
+    test_samples_per_second = total_test_samples / test_duration if test_duration > 0 else 0
+
+    avg_test_loss = test_loss_sum / total_test_samples if total_test_samples > 0 else 0
+    accuracy = 100. * correct / total_test_samples if total_test_samples > 0 else 0
+    print(f"Integer model Test:  Loss={avg_test_loss:.4f}, Acc={accuracy:.2f}%, Speed={test_samples_per_second:.2f} samples/sec")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='LSQ W4A4 Quantization Inference')
+    parser.add_argument('-b','--batch-size', type=int, default=128, metavar='N',
+                        help='input batch size for training (default: 128)')
+    parser.add_argument('-tb','--test-batch-size', type=int, default=1000, metavar='N',
+                        help='input batch size for testing (default: 1000)')
+    parser.add_argument('-cuda','--cuda', type=int, default=0, help='cuda id (default: 0, use -1 for CPU)')
+    parser.add_argument('-w','--w-num-bits', type=int, default=4, help='Number of bits for weight quantization (default: 4 for W4A4)')
+    parser.add_argument('-a','--a-num-bits', type=int, default=4, help='Number of bits for activation quantization (default: 4 for W4A4)')
+    parser.add_argument('-d','--dataset', type=str, default='cifar10', help='Dataset to use (default: cifar10)')
+    parser.add_argument('--model', type=str, default='resnet18',
+                        help='Model to use (default: resnet18)')
+    parser.add_argument('--image-size', type=int, default=32,
+                        help='Image size (default: 32)')
+    parser.add_argument('--num-classes', type=int, default=10,
+                        help='Number of classes (default: 10)')
+
+    args = parser.parse_args()
+    print(args)
+
     device = torch.device(f"cuda:{args.cuda}" if args.cuda >= 0 and torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Load dataset
     print("Loading dataset...")
-    _, test_loader = get_data_loader(dataset_type=args.dataset,
-                                     img_size=32,  # Assuming CIFAR-10 default
-                                     train_batch_size=1, # Not used
-                                     test_batch_size=args.test_batch_size)
+    train_loader, test_loader = get_data_loader(dataset_type=args.dataset, 
+                                                img_size=args.image_size, 
+                                                train_batch_size=args.batch_size,
+                                                test_batch_size=args.test_batch_size) 
     print("Dataset loaded.")
 
-    # Load checkpoint
-    if not os.path.exists(args.checkpoint_path):
-        print(f"Error: Checkpoint path {args.checkpoint_path} does not exist.")
-        return
-    
-    print(f"Loading checkpoint from {args.checkpoint_path}...")
-    checkpoint = torch.load(args.checkpoint_path, map_location='cpu') # Load to CPU first
-
-    w_num_bits = checkpoint.get('w_num_bits')
-    a_num_bits = checkpoint.get('a_num_bits')
-
-    if w_num_bits is None or a_num_bits is None:
-        print("Error: w_num_bits or a_num_bits not found in checkpoint. Cannot proceed with quantization setup.")
-        # Fallback or allow user to specify if not in checkpoint
-        # For now, let's assume they must be in the checkpoint as per q_main.py
-        w_num_bits = args.w_num_bits_fallback # Add this as an arg if needed
-        a_num_bits = args.a_num_bits_fallback # Add this as an arg if needed
-        print(f"Warning: Using fallback w_bits={w_num_bits}, a_bits={a_num_bits}. Inference might be incorrect if these don't match training.")
-        # return
-
-    # Initialize model
-    print(f"Initializing model ({args.net}) for W{w_num_bits}A{a_num_bits} integer-only inference...")
-    if args.net == 'resnet_cifar10':
-        # Create a float model instance first
-        model = ResNet18_CIFAR10(num_classes=10) # Assuming 10 classes for CIFAR-10
+    if args.model == 'resnet_cifar10':
+        model = ResNet18_CIFAR10(num_classes=args.num_classes).to(device)
+    elif args.model == 'tiny_vgg':
+        model = TinyVGG(image_size=args.image_size, num_classes=args.num_classes)
     else:
-        raise ValueError(f"Network {args.net} not supported.")
+        raise ValueError(f"Network {args.model} not supported.")
+    
+    criterion = nn.CrossEntropyLoss()
 
-    # Fuse BN layers (must be done on the float model before quantization structure is applied)
-    model.eval() # Set to eval mode for BN fusion
     print("Fusing Batch Norm layers...")
+    model.eval()
     model.fuse_bn()
     print("BN layers fused.")
 
-    # Apply quantization structure
-    print(f"Applying quantization structure W{w_num_bits}A{a_num_bits} to the model...")
-    model.quantize(w_num_bits=w_num_bits, a_num_bits=a_num_bits)
-    print("Quantization structure applied.")
-
-    # Load the quantized state_dict
-    model.load_state_dict(checkpoint['net'])
-    print("Loaded quantized model weights from checkpoint.")
-    
+    print(f"Quantizing model to W{args.w_num_bits}A{args.a_num_bits}...")
+    model.quantize(w_num_bits=args.w_num_bits, a_num_bits=args.a_num_bits)
+    print("Model quantized.")
+    state_dict = torch.load(f'./qat_logs/{args.dataset}/{args.model}_w{args.w_num_bits}a{args.a_num_bits}/checkpoint_max.pth', map_location='cpu')['net']
+    model.load_state_dict(state_dict)
     model.to(device)
-    model.eval() # Ensure model is in evaluation mode
-
-    # Freeze the model for integer-only inference (calculates M, n, etc.)
-    print("Freezing model for pure integer inference...")
     model.freeze()
     print("Model frozen.")
-
-    correct = 0
-    total = 0
-    
-    print("Starting inference...")
-    inference_start_time = time.time()
     with torch.no_grad():
-        for batch_idx, (data, target) in enumerate(test_loader):
-            data, target = data.to(device), target.to(device)
-            
-            # Perform pure integer inference
-            output = model.quantize_inference(data)
-            
-            _, predicted = torch.max(output.data, 1)
-            total += target.size(0)
-            correct += (predicted == target).sum().item()
-            
-            if (batch_idx + 1) % 10 == 0:
-                print(f"Processed [{batch_idx + 1}/{len(test_loader)}] batches...")
+        q_inference(model, device, test_loader, criterion)
 
-    inference_end_time = time.time()
-    inference_duration = inference_end_time - inference_start_time
-    
-    accuracy = 100. * correct / total
-    print(f"Inference finished in {inference_duration:.2f} seconds.")
-    print(f"Test Accuracy on {args.dataset} (W{w_num_bits}A{a_num_bits} pure integer inference): {accuracy:.2f}%")
+    print("Quantization-aware inference finished.")
 
-def main():
-    parser = argparse.ArgumentParser(description='PyTorch CIFAR-10 Pure Integer Inference for ResNet')
-    parser.add_argument('--cuda', type=int, default=0, help='CUDA ID (default: 0, use -1 for CPU)')
-    parser.add_argument('--test-batch-size', type=int, default=100, metavar='N',
-                        help='input batch size for testing (default: 100)')
-    parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'cifar100'],
-                        help='dataset to use (default: cifar10)')
-    parser.add_argument('--net', type=str, default='resnet_cifar10',
-                        help='network to use (default: resnet_cifar10)')
-    parser.add_argument('--checkpoint-path', type=str, required=True,
-                        help='Path to the trained quantized model checkpoint (.pth file from q_main.py)')
-    # Fallback quantization bits if not found in checkpoint (optional, but good for robustness)
-    parser.add_argument('--w-num-bits-fallback', type=int, default=4, help='Fallback weight bits if not in checkpoint')
-    parser.add_argument('--a-num-bits-fallback', type=int, default=4, help='Fallback activation bits if not in checkpoint')
-
-
-    args = parser.parse_args()
-    inference(args)
 
 if __name__ == '__main__':
     main()
-'''
-python q_inference.py --checkpoint-path qat_logs/resnet_cifar10_w4a4/checkpoint_max_w4a4.pth
-'''

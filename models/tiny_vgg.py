@@ -94,7 +94,7 @@ class TinyVGG(nn.Module):
                             torch.quantization.fuse_modules(stage, [conv_name, bn_name], inplace=True)
                     i += 1
 
-    def quantize(self, w_num_bits, a_num_bits, precision):
+    def quantize(self, w_num_bits, a_num_bits):
         for stage_name in ['stage1', 'stage2', 'stage3', 'stage4']:
             stage = getattr(self, stage_name)
             if isinstance(stage, nn.Sequential):
@@ -102,14 +102,14 @@ class TinyVGG(nn.Module):
                     module = stage[i]
                     if isinstance(module, nn.Conv2d):
                         # Replace nn.Conv2d with QConv2d
-                        stage[i] = QConv2d(module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+                        stage[i] = QConv2d(module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         
         if isinstance(self.fc1, nn.Linear):
-            self.fc1 = QLinear(self.fc1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+            self.fc1 = QLinear(self.fc1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         if isinstance(self.fc2, nn.Linear):
-            self.fc2 = QLinear(self.fc2, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+            self.fc2 = QLinear(self.fc2, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         if isinstance(self.fc3, nn.Linear):
-            self.fc3 = QLinear(self.fc3, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+            self.fc3 = QLinear(self.fc3, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
 
     def quantize_forward(self, x):
         x = F.relu(self.stage1.conv0(x))
@@ -132,115 +132,45 @@ class TinyVGG(nn.Module):
         return x
 
     def freeze(self):
-        last_qo = None # This will track the output quantizer of the previous layer
-        # Initial input quantizer (if inputs are meant to be quantized, otherwise None or a default QParam for fp inputs)
-        # For now, let's assume the very first conv layer's qi will be initialized based on its own settings (e.g. if qi=True in QConv2d)
-        # or it expects floating point input. If the model input itself needs quantization, a global qi should be passed and managed.
-        
-        # Freeze convolutional stages
+        last_qo = None
         for stage_name in ['stage1', 'stage2', 'stage3', 'stage4']:
             stage = getattr(self, stage_name)
             if isinstance(stage, nn.Sequential):
                 for i in range(len(stage)):
                     module = stage[i]
                     if isinstance(module, QConv2d):
-                        # The first QConv in a chain might not have a last_qo if it's the first layer overall.
-                        # QConv2d.freeze expects the input quantizer `qi`.
-                        # If module.qi is already set (e.g. qi=True in constructor), it might use that.
-                        # Otherwise, we need to provide it. Let's assume qi is passed if not first layer.
-                        current_module_qi = last_qo
-                        if last_qo is None and not hasattr(module, 'qi'): # Very first conv, and it doesn't have its own qi
-                             # This case needs careful handling. If input is float, qi for first layer is effectively None or a dummy.
-                             # QConv2d freeze logic needs to be robust to this.
-                             # For now, let's assume QConv2d with qi=False handles this by not needing an explicit qi for freezing its weights if no input scale is given
-                             # Or, we establish a convention: first layer's weights are quantized based on its qw, and its output qo is established.
-                             # The `freeze` in `QConv2d` needs the input scale `qi.alpha` to calculate `M`.
-                             # Let's assume an initial `QParam` for the input if not provided.
-                             # This part is tricky and depends on QConv2d's freeze implementation details.
-                             # Simplified: The QConv2d itself should handle if qi is passed as None to freeze when it's the first layer.
-                             # Or, we need an explicit input QParam for the whole network.
-                             # For now, let's assume QConv2d's freeze can take `None` for `qi` for the first layer.
-                             pass # Fallthrough, QConv2d should handle if qi is None
+                        module_qo = module.freeze(qi=last_qo)
+                        last_qo = module_qo 
 
-                        module_qo = module.freeze(qi=current_module_qi)
-                        last_qo = module_qo # Output quantizer of this conv becomes input for next
-                    # ReLU and other layers usually don't change the quantization parameters themselves in freeze,
-                    # but rely on the preceding/succeeding Q-layers.
+        last_qo = self.fc1.freeze(qi=last_qo)
+        last_qo = self.fc2.freeze(qi=last_qo)
+        last_qo = self.fc3.freeze(qi=last_qo)
+        self.qo = last_qo
 
-        # Freeze fully connected layers
-        if isinstance(self.fc1, QLinear):
-            fc1_qo = self.fc1.freeze(qi=last_qo)
-            last_qo = fc1_qo
-        # ReLU after fc1 doesn't change last_qo scale
-        if isinstance(self.fc2, QLinear):
-            fc2_qo = self.fc2.freeze(qi=last_qo)
-            last_qo = fc2_qo
-        # ReLU after fc2 doesn't change last_qo scale
-        if isinstance(self.fc3, QLinear):
-            self.fc3.freeze(qi=last_qo)
-            # Output layer, its qo is the final network qo if needed elsewhere.
-
-    def quantize_inference(self, x):
-        # Assume x is already quantized if the model expects quantized input
-        # Or, x is float and the first layer handles its quantization (integer mult by M0/2^n)
-
-        # Stage 1
-        for i, layer in enumerate(self.stage1):
+    def _quantize_inference_stage(self, x, stage):
+        for layer in stage:
             if isinstance(layer, QConv2d):
-                x = layer.quantize_inference(x)
-            elif isinstance(layer, nn.ReLU):
-                x = F.relu(x) # Apply ReLU directly on potentially integer data (clamped)
-            else:
-                x = layer(x) # MaxPool, etc.
-        
-        # Stage 2
-        for i, layer in enumerate(self.stage2):
-            if isinstance(layer, QConv2d):
-                x = layer.quantize_inference(x)
+                x = layer.quantize_inference_integer(x)
             elif isinstance(layer, nn.ReLU):
                 x = F.relu(x)
             else:
                 x = layer(x)
+        return x
 
-        # Stage 3
-        for i, layer in enumerate(self.stage3):
-            if isinstance(layer, QConv2d):
-                x = layer.quantize_inference(x)
-            elif isinstance(layer, nn.ReLU):
-                x = F.relu(x)
-            else:
-                x = layer(x)
-
-        # Stage 4
-        for i, layer in enumerate(self.stage4):
-            if isinstance(layer, QConv2d):
-                x = layer.quantize_inference(x)
-            elif isinstance(layer, nn.ReLU):
-                x = F.relu(x)
-            else:
-                x = layer(x)
+    def quantize_inference_integer(self, x):
+        for stage_name in ['stage1', 'stage2', 'stage3', 'stage4']:
+            stage = getattr(self, stage_name)
+            x = self._quantize_inference_stage(x, stage)
 
         x = torch.flatten(x, 1)
         
-        # FC layers
-        if isinstance(self.fc1, QLinear):
-            x = self.fc1.quantize_inference(x)
-        else:
-            x = self.fc1(x)
-        x = self.relu1(x) # Assuming relu1 is nn.ReLU
-        x = self.dp1(x) 
+        x = self.fc1.quantize_inference_integer(x)
+        x = self.relu1(x)
         
-        if isinstance(self.fc2, QLinear):
-            x = self.fc2.quantize_inference(x)
-        else:
-            x = self.fc2(x)
-        x = self.relu2(x) # Assuming relu2 is nn.ReLU
-        x = self.dp2(x)
-
-        if isinstance(self.fc3, QLinear):
-            x = self.fc3.quantize_inference(x)
-        else:
-            x = self.fc3(x)
+        x = self.fc2.quantize_inference_integer(x)
+        x = self.relu2(x)
+        
+        x = self.fc3.quantize_inference_integer(x)
             
         return x
 

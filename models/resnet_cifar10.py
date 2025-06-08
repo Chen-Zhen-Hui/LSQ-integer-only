@@ -12,6 +12,8 @@ class BasicBlock(nn.Module):
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
+        self.relu1 = nn.ReLU6()
+        self.relu2 = nn.ReLU6()
 
         self.shortcut = nn.Sequential()
         if stride != 1 or in_planes != self.expansion * planes:
@@ -21,34 +23,33 @@ class BasicBlock(nn.Module):
             )
 
     def forward(self, x):
-        out = F.relu6(self.bn1(self.conv1(x)))
+        out = self.relu1(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
         out += self.shortcut(x)
-        out = F.relu6(out)
+        out = self.relu2(out)
         return out
 
     def fuse_bn(self):
         torch.quantization.fuse_modules(self, ['conv1', 'bn1'], inplace=True)
         torch.quantization.fuse_modules(self, ['conv2', 'bn2'], inplace=True)
 
-        # Fuse shortcut conv and bn if they exist
         if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) == 2:
             if isinstance(self.shortcut[0], nn.Conv2d) and isinstance(self.shortcut[1], nn.BatchNorm2d):
                 torch.quantization.fuse_modules(self.shortcut, ['0', '1'], inplace=True)
 
-    def quantize(self, w_num_bits, a_num_bits, precision):
-        self.conv1 = QConv2d(self.conv1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
-        self.conv2 = QConv2d(self.conv2, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+    def quantize(self, w_num_bits, a_num_bits):
+        self.conv1 = QConv2d(self.conv1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
+        self.conv2 = QConv2d(self.conv2, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) > 0 and isinstance(self.shortcut[0], nn.Conv2d):
             original_conv_module = self.shortcut[0]
-            self.shortcut[0] = QConv2d(original_conv_module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
-        self.add = QAdd(qi=False, q_shortcut=False, qo=True, num_bits=a_num_bits, precision=precision)
+            self.shortcut[0] = QConv2d(original_conv_module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
+        self.add = QAdd(qi=False, q_shortcut=False, qo=True, num_bits=a_num_bits)
 
     def quantize_forward(self, x, qi=None):
-        out = F.relu(self.conv1(x, qi))
+        out = self.relu1(self.conv1(x, qi))
         out = self.conv2(out, self.conv1.qo)
         out = self.add(out, self.shortcut[0](x, qi) if len(self.shortcut) > 0 else x)
-        out = F.relu(out)
+        out = self.relu2(out)
         return out
     
     def freeze(self, qi):
@@ -62,7 +63,7 @@ class BasicBlock(nn.Module):
         return self.qo
     
     def quantize_inference(self, x):
-        main_path_out = F.relu(self.conv1.quantize_inference(x))
+        main_path_out = self.relu1(self.conv1.quantize_inference(x))
         main_path_out = self.conv2.quantize_inference(main_path_out)
 
         if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) > 0 and isinstance(self.shortcut[0], QConv2d):
@@ -70,7 +71,7 @@ class BasicBlock(nn.Module):
         else: # Identity shortcut
             shortcut_out = x
         out = self.add.quantize_inference(main_path_out, shortcut_out)
-        out = F.relu(out)
+        out = self.relu2(out)
         return out
 
 class ResNet(nn.Module):
@@ -80,6 +81,7 @@ class ResNet(nn.Module):
         
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
+        self.relu1 = nn.ReLU6()
         
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
@@ -98,7 +100,7 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        out = F.relu6(self.bn1(self.conv1(x)))
+        out = self.relu1(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
@@ -131,7 +133,7 @@ class ResNet(nn.Module):
 
     def quantize_forward(self, x):
         current_tensor = self.conv1(x) 
-        current_tensor = F.relu(current_tensor)
+        current_tensor = self.relu1(current_tensor)
         
         last_qo = self.conv1.qo
 
@@ -157,7 +159,7 @@ class ResNet(nn.Module):
         return self.qo
 
     def quantize_inference(self, x):
-        out = F.relu(self.conv1(x))
+        out = self.relu1(self.conv1(x))
         out = self.conv1.qo.quantize_tensor(out)
         current_input = out
         for layer_name in ['layer1', 'layer2', 'layer3', 'layer4']:

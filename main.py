@@ -131,9 +131,9 @@ def main():
     elif args.model == 'tiny_vgg':
         model = TinyVGG(image_size=args.image_size, num_classes=args.num_classes).to(device)
     elif args.model == 'resnet18':
-        model = ResNet18(image_size=args.image_size, num_classes=10).to(device)
+        model = ResNet18(image_size=args.image_size, num_classes=args.num_classes).to(device)
     elif args.model == 'resnet34':
-        model = ResNet34(image_size=args.image_size, num_classes=10).to(device)
+        model = ResNet34(image_size=args.image_size, num_classes=args.num_classes).to(device)
     else:
         raise ValueError(f"Model {args.model} not supported")
     print("Model initialized.")

@@ -112,7 +112,6 @@ def main():
     parser.add_argument('-w','--w-num-bits', type=int, default=4, help='Number of bits for weight quantization (default: 4 for W4A4)')
     parser.add_argument('-a','--a-num-bits', type=int, default=4, help='Number of bits for activation quantization (default: 4 for W4A4)')
     parser.add_argument('-d','--dataset', type=str, default='cifar10', help='Dataset to use (default: cifar10)')
-    parser.add_argument('-p','--precision', type=str, default='fp32', help='Precision to use (default: fp32)')
     parser.add_argument('--model', type=str, default='resnet18',
                         help='Model to use (default: resnet18)')
     parser.add_argument('--image-size', type=int, default=32,
@@ -161,7 +160,7 @@ def main():
     # test_float(model, device, test_loader, criterion)
 
     print(f"Quantizing model to W{args.w_num_bits}A{args.a_num_bits}...")
-    model.quantize(w_num_bits=args.w_num_bits, a_num_bits=args.a_num_bits, precision=args.precision)
+    model.quantize(w_num_bits=args.w_num_bits, a_num_bits=args.a_num_bits)
     print("Model quantized.")
     model.to(device)
 
