@@ -264,7 +264,6 @@ class QLinear(QModule):
         
         if self.linear_module.bias is not None:
             if qi:
-                # bias_scale = self.qw.alpha.detach() * qi.alpha.detach()
                 bias_scale = self.qw.alpha * qi.alpha
                 q_bias = fake_quantize_tensor(self.linear_module.bias.float(), bias_scale, 32)
             else:
@@ -327,16 +326,13 @@ class QLinear(QModule):
     def quantize_inference(self, x):
         x = F.linear(x, self.linear_module.weight, self.linear_module.bias)
         x = x*self.M0.data.item()/2**self.n.data.item()
-        # x = x*self.M.data.item()
         x = round_ste_for_inference(x)
-        # x = x+self.linear_module.bias.view(1, -1)
         x.clamp_(-2**(self.qo.num_bits-1), 2**(self.qo.num_bits-1)-1)
         return x
     
 class QAdd(QModule):
     def __init__(self, num_bits, qi=False, q_shortcut=False, qo=True):
         super(QAdd, self).__init__(qi=qi, qo=qo, num_bits=num_bits)
-        # self.q_shortcut = QParam(num_bits=num_bits) if q_shortcut else None
         self.register_buffer('M', torch.zeros(1))
         self.register_buffer('n', torch.zeros(1))
         self.register_buffer('M_shortcut', torch.zeros(1))
@@ -384,7 +380,6 @@ class QAdd(QModule):
             self.n.data = torch.tensor(n_val, dtype=torch.float)
             self.M_shortcut.data = torch.tensor(Mo_shortcut, dtype=torch.float)
             self.n_shortcut.data = torch.tensor(n_shortcut_val, dtype=torch.float)
-            # Mo, n_val = search(self.qo.alpha.data.item())
             self.Mo.data = torch.tensor(1, dtype=torch.float)
             self.no.data = torch.tensor(10, dtype=torch.float)
         

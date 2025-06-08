@@ -114,7 +114,7 @@ class ResNet(nn.Module):
             if isinstance(m, BasicBlock):
                 m.fuse_bn()
 
-    def quantize(self, w_num_bits, a_num_bits, precision):
+    def quantize(self, w_num_bits, a_num_bits):
         if isinstance(self.conv1, nn.Conv2d):
             self.conv1 = QConv2d(self.conv1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         
@@ -124,10 +124,10 @@ class ResNet(nn.Module):
                 for i in range(len(layer_group)):
                     block_module = layer_group[i]
                     if isinstance(block_module, BasicBlock):
-                        block_module.quantize(w_num_bits=w_num_bits, a_num_bits=a_num_bits, precision=precision)
+                        block_module.quantize(w_num_bits=w_num_bits, a_num_bits=a_num_bits)
         
         if isinstance(self.linear, nn.Linear):
-            self.linear = QLinear(self.linear, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+            self.linear = QLinear(self.linear, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
 
     def quantize_forward(self, x):
         current_tensor = self.conv1(x) 
