@@ -7,10 +7,9 @@ import os
 
 def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, distributed=False, world_size=None, rank=0):
     if dataset_type=='imagenet':
-        data_root = '/hdd_raid5/xuhr/ImageNet/'
-        data_dir = data_root
-        traindir = os.path.join(data_dir, 'train')
-        valdir = os.path.join(data_dir, 'val')
+        data_root = '/pm981a/xuhr/dataset/ImageNet/'
+        traindir = os.path.join(data_root, 'train')
+        valdir = os.path.join(data_root, 'val')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -62,9 +61,8 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
         test_loader = torch.utils.data.DataLoader(
             val_dataset, batch_size=test_batch_size,
             num_workers=4, pin_memory=True, sampler=val_sampler)
-    elif dataset_type=='tiny_imagenet':
-        data_root = "/hdd_raid5/chenzh/tiny-imagenet-200/"
-        data_dir = data_root
+    elif dataset_type=='tiny-imagenet':
+        data_root = "/pm981a/xuhr/dataset/tiny-imagenet-200/"
         transform = {
             'train': transforms.Compose([
                 transforms.RandomResizedCrop(img_size),
@@ -84,7 +82,7 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
         val_data = datasets.ImageFolder(root=data_root+'/val', transform=transform['val'])
         test_loader = torch.utils.data.DataLoader(val_data, batch_size=test_batch_size, shuffle=False)
     elif dataset_type=='cifar10':
-        data_root = '/home/chenzh/cifar-10/'
+        data_root = '/barracuda_2T/chenzh/cifar10/'
         transform_train = transforms.Compose(
             [
                 transforms.RandomCrop(32, padding=4),
@@ -105,6 +103,8 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
 
         testset = datasets.CIFAR10(root=data_root, train=False, download=False, transform=transform_test)
         test_loader = torch.utils.data.DataLoader(testset, batch_size=test_batch_size, shuffle=False,num_workers=8, pin_memory=True)
+    else:
+        raise ValueError(f"Dataset type {dataset_type} not supported")
     return train_loader, test_loader
 
 if __name__ == '__main__':

@@ -2,11 +2,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import argparse
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 import time
 from datasets import get_data_loader
 from models.resnet_cifar10 import ResNet18_CIFAR10
+from models.tiny_vgg import TinyVGG
+from models.resnet import ResNet18, ResNet34
 import os
 
 def train(model, device, train_loader, optimizer, criterion, scaler, use_amp_effective):
@@ -21,7 +23,7 @@ def train(model, device, train_loader, optimizer, criterion, scaler, use_amp_eff
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         
-        with autocast(enabled=use_amp_effective):
+        with autocast(device_type='cuda', enabled=use_amp_effective):
             output = model(data)
             loss = criterion(output, target)
         
@@ -31,7 +33,6 @@ def train(model, device, train_loader, optimizer, criterion, scaler, use_amp_eff
         
         running_loss += loss.item()
         
-        # Calculate training accuracy for the batch
         pred_train = output.argmax(dim=1, keepdim=True)
         correct_train += pred_train.eq(target.view_as(pred_train)).sum().item()
         total_train_samples += data.size(0)
@@ -57,7 +58,7 @@ def test(model, device, test_loader, criterion, use_amp_effective):
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
             total_test_samples += data.size(0)
-            with autocast(enabled=use_amp_effective):
+            with autocast(device_type='cuda', enabled=use_amp_effective):
                 output = model(data)
                 loss = criterion(output, target) 
             test_loss_sum += loss.item() * data.size(0)
@@ -79,28 +80,33 @@ def main():
                         help='input batch size for training (default: 128)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
+    parser.add_argument('-e','--epochs', type=int, default=200, metavar='N',
+                        help='number of epochs to train (default: 200)')
+    parser.add_argument('-lr','--lr', type=float, default=0.1, metavar='LR',
                         help='learning rate (default: 0.1)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
     parser.add_argument('--cuda', type=int, default=0, help='cuda id (default: 0, use -1 for CPU)')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
-                        help='random seed (default: 1)')
-    parser.add_argument('--dataset-path', type=str, default='/home/chenzh/cifar-10/',
-                        help='Path to CIFAR-10 dataset root directory')
-    parser.add_argument('--amp', action='store_true', default=False,
+    parser.add_argument('--seed', type=int, default=42, metavar='S',
+                        help='random seed (default: 42)')
+    parser.add_argument('-d','--dataset', type=str, default='cifar10',
+                        help='Dataset to use (default: cifar10)')
+    parser.add_argument('-amp','--amp', action='store_true', default=False,
                         help='Enable Automatic Mixed Precision (AMP) training')
-    parser.add_argument('--log-dir', type=str, default='logs/cifar10_experiment',
-                        help='Directory for TensorBoard logs (default: logs/cifar10_experiment)')
+    parser.add_argument('--log-dir', type=str, default='logs',
+                        help='Directory for TensorBoard logs (default: logs)')
+    parser.add_argument('--model', type=str, default='resnet18',
+                        help='Model to use (default: resnet18)')
+    parser.add_argument('--image-size', type=int, default=32,
+                        help='Image size (default: 32)')
+    parser.add_argument('--num-classes', type=int, default=10,
+                        help='Number of classes (default: 10)')
 
     args = parser.parse_args()
-    
+    print(args)
     torch.manual_seed(args.seed)
 
     device = torch.device(f"cuda:{args.cuda}" if args.cuda >= 0 and torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     use_amp_effective = args.amp and (device.type == 'cuda')
 
@@ -111,25 +117,32 @@ def main():
             print("AMP was requested but is only effective on CUDA. Running on CPU without AMP.")
         else:
             print("AMP disabled or not requested.")
+    out_dir = os.path.join(args.log_dir, args.dataset, args.model)
+    writer = SummaryWriter(log_dir=out_dir)
 
-    writer = SummaryWriter(log_dir=args.log_dir)
-
-    print("Loading CIFAR-10 dataset...")
-    train_loader, test_loader = get_data_loader(dataset_type='cifar10', 
-                                                img_size=32, 
+    train_loader, test_loader = get_data_loader(dataset_type=args.dataset, 
+                                                img_size=args.image_size, 
                                                 train_batch_size=args.batch_size,
                                                 test_batch_size=args.test_batch_size) 
-    print("Dataset loaded.")
 
     print("Initializing model...")
-    model = ResNet18_CIFAR10(num_classes=10).to(device)
+    if args.model == 'resnet_cifar10':
+        model = ResNet18_CIFAR10(num_classes=args.num_classes).to(device)
+    elif args.model == 'tiny_vgg':
+        model = TinyVGG(image_size=args.image_size, num_classes=args.num_classes).to(device)
+    elif args.model == 'resnet18':
+        model = ResNet18(image_size=args.image_size, num_classes=10).to(device)
+    elif args.model == 'resnet34':
+        model = ResNet34(image_size=args.image_size, num_classes=10).to(device)
+    else:
+        raise ValueError(f"Model {args.model} not supported")
     print("Model initialized.")
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    scaler = GradScaler(enabled=use_amp_effective)
+    scaler = GradScaler(device='cuda', enabled=use_amp_effective)
 
     print("Starting training...")
     max_test_acc = 0
@@ -156,8 +169,8 @@ def main():
               f"  Train: Loss={train_loss:.4f}, Acc={train_acc:.2f}%, Speed={train_speed:.2f} samples/sec\n"
               f"  Test:  Loss={test_loss:.4f}, Acc={test_acc:.2f}%, Speed={test_speed:.2f} samples/sec")
         if save_max:
-            torch.save(checkpoint, os.path.join(args.log_dir, 'checkpoint_max.pth'))
-        torch.save(checkpoint, os.path.join(args.log_dir, 'checkpoint_latest.pth'))
+            torch.save(checkpoint, os.path.join(out_dir, 'checkpoint_max.pth'))
+        torch.save(checkpoint, os.path.join(out_dir, 'checkpoint_latest.pth'))
 
     print("Training finished.")
     writer.close()

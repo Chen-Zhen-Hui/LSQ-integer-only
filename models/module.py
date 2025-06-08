@@ -127,7 +127,9 @@ class QParam(nn.Module):
         return dequantize_tensor(q_x, self.alpha)
     
     def fake_quantize(self, tensor):
-        return fake_quantize_tensor(tensor, self.alpha, self.num_bits)
+        target_dtype = tensor.dtype
+        result = fake_quantize_tensor(tensor, self.alpha, self.num_bits)
+        return result.to(target_dtype)
 
 
 class QModule(nn.Module):
@@ -138,7 +140,7 @@ class QModule(nn.Module):
             self.qi = QParam(num_bits=num_bits)
         if qo:
             self.qo = QParam(num_bits=num_bits)
-        
+
     def freeze(self):
         pass
 
@@ -160,28 +162,40 @@ class QConv2d(QModule):
         self.register_buffer('Mo', torch.zeros(1))
         self.register_buffer('no', torch.zeros(1))
 
-    def forward(self, x):
-        if hasattr(self, 'qi'):
-            if self.qi.init_state.item() == 0:
-                self.qi.initialize_alpha(x)
-            x = self.qi.fake_quantize(x)
+    def forward(self, x, qi=None):
+        target_dtype = self._get_target_dtype()
 
         if self.qw.init_state.item() == 0:
-            self.qw.initialize_alpha(self.conv_module.weight)
+            self.qw.initialize_alpha(self.conv_module.weight.float())
         
         q_weight = self.qw.fake_quantize(self.conv_module.weight)
+        
+        if self.conv_module.bias is not None:
+            if qi:
+                # bias_scale = self.qw.alpha.detach() * qi.alpha.detach()
+                bias_scale = self.qw.alpha * qi.alpha
+                q_bias = fake_quantize_tensor(self.conv_module.bias.float(), bias_scale, 32)
+            else:
+                q_bias = self.conv_module.bias.float()
+            q_bias_prec = q_bias.to(target_dtype)
+        else:
+            q_bias_prec = None
 
-        x = F.conv2d(x, q_weight, None, 
-                     self.conv_module.stride, self.conv_module.padding, 
-                     self.conv_module.dilation, self.conv_module.groups)
+        x_prec = x.to(target_dtype)
+        q_weight_prec = q_weight.to(target_dtype)
+
+        output_prec = F.conv2d(x_prec, q_weight_prec, q_bias_prec, 
+                               self.conv_module.stride, self.conv_module.padding, 
+                               self.conv_module.dilation, self.conv_module.groups)
 
         if hasattr(self, 'qo'):
             if self.qo.init_state.item() == 0:
-                self.qo.initialize_alpha(x)
-            x = self.qo.fake_quantize(x)+self.qo.fake_quantize(self.conv_module.bias).view(1, self.conv_module.out_channels, 1, 1)
-            x = self.qo.fake_quantize(x)
+                self.qo.initialize_alpha(output_prec.float())
+            final_output = self.qo.fake_quantize(output_prec)
+        else:
+            final_output = output_prec.float()
         
-        return x
+        return final_output
 
     def freeze(self, qi:QParam=None, qo:QParam=None):
 
@@ -199,7 +213,7 @@ class QConv2d(QModule):
         if not hasattr(self, 'qi') or not hasattr(self, 'qo') or not hasattr(self, 'qw'):
             print("Warning: qi, qo, or qw not fully available for M calculation in freeze. Skipping M calculation.")
         else:
-            M_val = (self.qw.alpha.data.item() * self.qi.alpha.data.item()) / self.qo.alpha.data.item() #*16
+            M_val = (self.qw.alpha.data.item() * self.qi.alpha.data.item()) / self.qo.alpha.data.item()
 
             Mo, n_val = search(M_val.item() if isinstance(M_val, torch.Tensor) else M_val)
             self.M0.data = torch.tensor(Mo, dtype=torch.float) # M0 can be large, ensure float or int64
@@ -211,7 +225,7 @@ class QConv2d(QModule):
         self.conv_module.weight.data = self.qw.quantize_tensor(self.conv_module.weight.data)
         if self.conv_module.bias is not None:
             if hasattr(self, 'qi') and hasattr(self, 'qw'): # Ensure scales are available
-                bias_scale = self.qo.alpha.data #*0.0625
+                bias_scale = self.qo.alpha.data
                 if bias_scale.item() != 0:
                     self.conv_module.bias.data = quantize_tensor(self.conv_module.bias.data, scale=bias_scale, num_bits=64)
                 else:
@@ -240,26 +254,38 @@ class QLinear(QModule):
         self.register_buffer('M0', torch.zeros(1))
         self.register_buffer('n', torch.zeros(1))
 
-    def forward(self, x, qi):
-        if hasattr(self, 'qi'):
-            if self.qi.init_state.item() == 0:
-                self.qi.initialize_alpha(x)
-            x = self.qi.fake_quantize(x)
+    def forward(self, x, qi=None):
+        target_dtype = self._get_target_dtype()
 
         if self.qw.init_state.item() == 0:
-            self.qw.initialize_alpha(self.linear_module.weight)
+            self.qw.initialize_alpha(self.linear_module.weight.float())
         
         q_weight = self.qw.fake_quantize(self.linear_module.weight)
-        q_bias = fake_quantize_tensor(self.linear_module.bias, self.qw.alpha * qi.alpha, 32)
-        x = F.linear(x, q_weight, q_bias)
+        
+        if self.linear_module.bias is not None:
+            if qi:
+                # bias_scale = self.qw.alpha.detach() * qi.alpha.detach()
+                bias_scale = self.qw.alpha * qi.alpha
+                q_bias = fake_quantize_tensor(self.linear_module.bias.float(), bias_scale, 32)
+            else:
+                q_bias = self.linear_module.bias.float()
+            q_bias_prec = q_bias.to(target_dtype)
+        else:
+            q_bias_prec = None
+
+        x_prec = x.to(target_dtype)
+        q_weight_prec = q_weight.to(target_dtype)
+
+        output_prec = F.linear(x_prec, q_weight_prec, q_bias_prec)
 
         if hasattr(self, 'qo'):
             if self.qo.init_state.item() == 0:
-                self.qo.initialize_alpha(x)
-            # x = self.qo.fake_quantize(x)+self.qo.fake_quantize(self.linear_module.bias).view(1, -1)
-            x = self.qo.fake_quantize(x)
+                self.qo.initialize_alpha(output_prec.float())
+            final_output = self.qo.fake_quantize(output_prec)
+        else:
+            final_output = output_prec.float()
         
-        return x
+        return final_output
 
     def freeze(self, qi=None, qo=None):
         if hasattr(self, 'qi') and qi is not None:
@@ -310,7 +336,7 @@ class QLinear(QModule):
 class QAdd(QModule):
     def __init__(self, num_bits, qi=False, q_shortcut=False, qo=True):
         super(QAdd, self).__init__(qi=qi, qo=qo, num_bits=num_bits)
-        self.q_shortcut = QParam(num_bits=num_bits) if q_shortcut else None
+        # self.q_shortcut = QParam(num_bits=num_bits) if q_shortcut else None
         self.register_buffer('M', torch.zeros(1))
         self.register_buffer('n', torch.zeros(1))
         self.register_buffer('M_shortcut', torch.zeros(1))
@@ -319,22 +345,12 @@ class QAdd(QModule):
         self.register_buffer('no', torch.zeros(1))
 
     def forward(self, x, shortcut):
-        if hasattr(self, 'qi'):
-            if self.qi.init_state.item() == 0:
-                self.qi.initialize_alpha(x)
-            x = self.qi.fake_quantize(x)
-        
-        if self.q_shortcut is not None:
-            if self.q_shortcut.init_state.item() == 0:
-                self.q_shortcut.initialize_alpha(shortcut)
-            shortcut = self.q_shortcut.fake_quantize(shortcut)
-        
-        x = x + shortcut
+        x = x.to(self._get_target_dtype()) + shortcut.to(self._get_target_dtype())
         
         if hasattr(self, 'qo'):
             if self.qo.init_state.item() == 0:
                 self.qo.initialize_alpha(x)
-            x = self.qo.fake_quantize(x)
+            x = self.qo.fake_quantize(x).to(self._get_target_dtype())
         
         return x
     

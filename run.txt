@@ -1,1 +1,12 @@
-python q_main.py --w-num-bits 4 --a-num-bits 2
+python main.py -d tiny-imagenet --model tiny_vgg        --image-size 64    --num-classes 200   -b 256 -e 100 --cuda 2 -lr 0.01
+python main.py -d cifar10       --model tiny_vgg        --image-size 32    --num-classes 10    -b 128 -e 200 --cuda 3 -lr 0.1
+python main.py -d imagenet      --model tiny_vgg        --image-size 128   --num-classes 1000  -b 256 -e 100 --cuda 3 -lr 0.03
+
+python main.py -d cifar10       --model resnet_cifar10  --image-size 32    --num-classes 10 -b 128 -e 200 --cuda 3 -lr 0.1
+
+python q_main.py -d tiny-imagenet --model tiny_vgg          --image-size 64  --num-classes 200   -w 4 -a 4 -e 20
+python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 4 -a 4 -e 20 -cuda 1 -lr 0.01
+
+python q_main.py -d cifar10       --model resnet_cifar10    --image-size 32  --num-classes 10    -w 4 -a 4 -e 20 -cuda 0 -lr 0.01
+
+python q_main.py --w-num-bits 4 --a-num-bits 4

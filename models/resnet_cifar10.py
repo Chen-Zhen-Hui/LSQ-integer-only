@@ -36,18 +36,18 @@ class BasicBlock(nn.Module):
             if isinstance(self.shortcut[0], nn.Conv2d) and isinstance(self.shortcut[1], nn.BatchNorm2d):
                 torch.quantization.fuse_modules(self.shortcut, ['0', '1'], inplace=True)
 
-    def quantize(self, w_num_bits, a_num_bits):
-        self.conv1 = QConv2d(self.conv1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
-        self.conv2 = QConv2d(self.conv2, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
+    def quantize(self, w_num_bits, a_num_bits, precision):
+        self.conv1 = QConv2d(self.conv1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+        self.conv2 = QConv2d(self.conv2, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
         if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) > 0 and isinstance(self.shortcut[0], nn.Conv2d):
             original_conv_module = self.shortcut[0]
-            self.shortcut[0] = QConv2d(original_conv_module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
-        self.add = QAdd(qi=False, q_shortcut=False, qo=True, num_bits=a_num_bits)
+            self.shortcut[0] = QConv2d(original_conv_module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
+        self.add = QAdd(qi=False, q_shortcut=False, qo=True, num_bits=a_num_bits, precision=precision)
 
-    def quantize_forward(self, x):
-        out = F.relu(self.conv1(x))
-        out = self.conv2(out)
-        out = self.add(out, self.shortcut(x))
+    def quantize_forward(self, x, qi=None):
+        out = F.relu(self.conv1(x, qi))
+        out = self.conv2(out, self.conv1.qo)
+        out = self.add(out, self.shortcut[0](x, qi) if len(self.shortcut) > 0 else x)
         out = F.relu(out)
         return out
     
@@ -114,7 +114,7 @@ class ResNet(nn.Module):
             if isinstance(m, BasicBlock):
                 m.fuse_bn()
 
-    def quantize(self, w_num_bits, a_num_bits):
+    def quantize(self, w_num_bits, a_num_bits, precision):
         if isinstance(self.conv1, nn.Conv2d):
             self.conv1 = QConv2d(self.conv1, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         
@@ -124,23 +124,28 @@ class ResNet(nn.Module):
                 for i in range(len(layer_group)):
                     block_module = layer_group[i]
                     if isinstance(block_module, BasicBlock):
-                        block_module.quantize(w_num_bits=w_num_bits, a_num_bits=a_num_bits)
+                        block_module.quantize(w_num_bits=w_num_bits, a_num_bits=a_num_bits, precision=precision)
         
         if isinstance(self.linear, nn.Linear):
-            self.linear = QLinear(self.linear, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
+            self.linear = QLinear(self.linear, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True, precision=precision)
 
     def quantize_forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        current_input = out
+        current_tensor = self.conv1(x) 
+        current_tensor = F.relu(current_tensor)
+        
+        last_qo = self.conv1.qo
+
         for layer_name in ['layer1', 'layer2', 'layer3', 'layer4']:
             layer_sequential = getattr(self, layer_name)
             for block in layer_sequential:
-                current_input = block.quantize_forward(current_input)
-        out = current_input
+                current_tensor = block.quantize_forward(current_tensor, qi=last_qo)
+                last_qo = block.add.qo
         
-        out = out.view(out.size(0), -1)
-        out = self.linear(out)
-        return out
+        out_features = current_tensor.view(current_tensor.size(0), -1)
+        
+        final_output = self.linear(out_features, qi=last_qo)
+        
+        return final_output
     
     def freeze(self):
         qo = self.conv1.qo

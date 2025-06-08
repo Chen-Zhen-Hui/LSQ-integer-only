@@ -1,5 +1,4 @@
-*.pt
-*.pth
-*.ckpt
 logs/
 qat_logs/
+datasets.py
+__pycache__/
