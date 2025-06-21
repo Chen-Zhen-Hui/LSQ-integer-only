@@ -10,7 +10,9 @@ python main.py -d imagenet      --model resnet34        --image-size 224   --num
 
 python q_main.py -d tiny-imagenet --model tiny_vgg          --image-size 64  --num-classes 200   -w 4 -a 4 -e 20
 python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 4 -a 4 -e 20 -cuda 1 -lr 0.01
+python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 8 -a 8 -e 20 -cuda 1 -lr 0.01
+
 
 python q_main.py -d cifar10       --model resnet_cifar10    --image-size 32  --num-classes 10    -w 4 -a 4 -e 20 -cuda 0 -lr 0.01
 
-python q_inference.py -d cifar10  --model tiny_vgg          --image-size 32  --num-classes 10    -w 4 -a 4 -cuda 1
+python q_inference.py -d cifar10  --model tiny_vgg          --image-size 32  --num-classes 10    -w 8 -a 8 -cuda 1

@@ -171,16 +171,15 @@ class QConv2d(QModule):
         if self.conv_module.bias is not None:
             if qi:
                 bias_scale = self.qw.alpha * qi.alpha
-                q_bias = fake_quantize_tensor(self.conv_module.bias.float(), bias_scale, 32)
+                q_bias = fake_quantize_tensor(self.conv_module.bias.float(), bias_scale, 16)
             else:
                 q_bias = self.conv_module.bias
         else:
             q_bias = None
 
         output = F.conv2d(x, q_weight, q_bias, 
-                               self.conv_module.stride, self.conv_module.padding, 
+                               self.conv_module.stride, self.conv_module.padding,
                                self.conv_module.dilation, self.conv_module.groups)
-
         if hasattr(self, 'qo'):
             if self.qo.init_state.item() == 0:
                 self.qo.initialize_alpha(output.float())
@@ -216,9 +215,9 @@ class QConv2d(QModule):
         self.conv_module.weight.data = self.qw.quantize_tensor(self.conv_module.weight.data)
         if self.conv_module.bias is not None:
             if hasattr(self, 'qi') and hasattr(self, 'qw'): # Ensure scales are available
-                bias_scale = self.qo.alpha.data
+                bias_scale = self.qi.alpha * self.qw.alpha
                 if bias_scale.item() != 0:
-                    self.conv_module.bias.data = quantize_tensor(self.conv_module.bias.data, scale=bias_scale, num_bits=64)
+                    self.conv_module.bias.data = quantize_tensor(self.conv_module.bias.data, scale=bias_scale, num_bits=32)
                 else:
                     print("Warning: Bias scale is zero. Bias not quantized for conv layer.")
             else:
@@ -227,7 +226,7 @@ class QConv2d(QModule):
 
     def quantize_inference(self, x):
         x = F.conv2d(x, self.conv_module.weight, self.conv_module.bias,
-                     self.conv_module.stride, self.conv_module.padding, 
+                     self.conv_module.stride, self.conv_module.padding,
                      self.conv_module.dilation, self.conv_module.groups)
         x = x*self.M.data.item()
         x = round_ste_for_inference(x)
@@ -259,8 +258,11 @@ class QLinear(QModule):
         q_weight = self.qw.fake_quantize(self.linear_module.weight)
         
         if self.linear_module.bias is not None:
-            bias_scale = self.qw.alpha * qi.alpha
-            q_bias = fake_quantize_tensor(self.linear_module.bias.float(), bias_scale, 32)
+            if qi:
+                bias_scale = self.qw.alpha * qi.alpha
+                q_bias = fake_quantize_tensor(self.linear_module.bias.float(), bias_scale, 16)
+            else:
+                q_bias = self.linear_module.bias
         else:
             q_bias = None
 

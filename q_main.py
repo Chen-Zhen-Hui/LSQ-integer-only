@@ -7,6 +7,7 @@ import time
 from datasets import get_data_loader
 from models.resnet_cifar10 import ResNet18_CIFAR10
 from models.tiny_vgg import TinyVGG
+from models.resnet import ResNet18, ResNet34
 import os
 
 def train(model, device, train_loader, optimizer, criterion):
@@ -144,7 +145,13 @@ def main():
         state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
     elif args.model == 'tiny_vgg':
         model = TinyVGG(image_size=args.image_size, num_classes=args.num_classes)
-        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']        
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
+    elif args.model == 'resnet18':
+        model = ResNet18(num_classes=args.num_classes, image_size=args.image_size).to(device)
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
+    elif args.model == 'resnet34':
+        model = ResNet34(num_classes=args.num_classes, image_size=args.image_size).to(device)
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
     else:
         raise ValueError(f"Network {args.model} not supported.")
 
@@ -157,7 +164,7 @@ def main():
     # test_float(model, device, test_loader, criterion)
     model.fuse_bn()
     print("BN layers fused.")
-    # test_float(model, device, test_loader, criterion)
+    test_float(model, device, test_loader, criterion)
 
     print(f"Quantizing model to W{args.w_num_bits}A{args.a_num_bits}...")
     model.quantize(w_num_bits=args.w_num_bits, a_num_bits=args.a_num_bits)

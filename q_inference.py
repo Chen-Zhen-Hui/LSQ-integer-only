@@ -9,38 +9,6 @@ from models.resnet_cifar10 import ResNet18_CIFAR10
 from models.tiny_vgg import TinyVGG
 import os
 
-def train(model, device, train_loader, optimizer, criterion):
-    model.train()
-    running_loss = 0.0
-    correct_train = 0
-    total_train_samples = 0
-    
-    start_time = time.time()
-    
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()
-        
-        output = model.quantize_forward(data)
-        loss = criterion(output, target)
-        loss.backward()
-        optimizer.step()
-        
-        running_loss += loss.item()
-        
-        pred_train = output.argmax(dim=1, keepdim=True)
-        correct_train += pred_train.eq(target.view_as(pred_train)).sum().item()
-        total_train_samples += data.size(0)
-            
-    end_time = time.time()
-    epoch_duration = end_time - start_time
-    samples_per_second = total_train_samples / epoch_duration if epoch_duration > 0 else 0
-    
-    avg_loss = running_loss / len(train_loader)
-    train_accuracy = 100. * correct_train / total_train_samples if total_train_samples > 0 else 0
-    
-    return avg_loss, train_accuracy, samples_per_second
-
 def q_inference(model, device, test_loader, criterion):
     model.eval()
     test_loss_sum = 0

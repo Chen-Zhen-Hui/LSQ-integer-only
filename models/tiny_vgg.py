@@ -101,7 +101,6 @@ class TinyVGG(nn.Module):
                 for i in range(len(stage)):
                     module = stage[i]
                     if isinstance(module, nn.Conv2d):
-                        # Replace nn.Conv2d with QConv2d
                         stage[i] = QConv2d(module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
         
         if isinstance(self.fc1, nn.Linear):
@@ -132,35 +131,63 @@ class TinyVGG(nn.Module):
         return x
 
     def freeze(self):
-        last_qo = None
-        for stage_name in ['stage1', 'stage2', 'stage3', 'stage4']:
-            stage = getattr(self, stage_name)
-            if isinstance(stage, nn.Sequential):
-                for i in range(len(stage)):
-                    module = stage[i]
-                    if isinstance(module, QConv2d):
-                        module_qo = module.freeze(qi=last_qo)
-                        last_qo = module_qo 
+        qo_s1c0 = self.stage1.conv0.qo
+        qo_s1c1 = self.stage1.conv1.freeze(qi=qo_s1c0)
+        qo_s1c2 = self.stage1.conv2.freeze(qi=qo_s1c1)
 
-        last_qo = self.fc1.freeze(qi=last_qo)
-        last_qo = self.fc2.freeze(qi=last_qo)
-        last_qo = self.fc3.freeze(qi=last_qo)
-        self.qo = last_qo
+        qo_s2c0 = self.stage2.conv0.freeze(qi=qo_s1c2)
+        qo_s2c1 = self.stage2.conv1.freeze(qi=qo_s2c0)
+        qo_s2c2 = self.stage2.conv2.freeze(qi=qo_s2c1)
 
-    def _quantize_inference_stage(self, x, stage):
-        for layer in stage:
-            if isinstance(layer, QConv2d):
-                x = layer.quantize_inference_integer(x)
-            elif isinstance(layer, nn.ReLU):
-                x = F.relu(x)
-            else:
-                x = layer(x)
-        return x
+        qo_s3c0 = self.stage3.conv0.freeze(qi=qo_s2c2)
+        qo_s3c1 = self.stage3.conv1.freeze(qi=qo_s3c0)
+        qo_s3c2 = self.stage3.conv2.freeze(qi=qo_s3c1)
+        qo_s3c3 = self.stage3.conv3.freeze(qi=qo_s3c2)
+
+        qo_s4c0 = self.stage4.conv0.freeze(qi=qo_s3c3)
+        qo_s4c1 = self.stage4.conv1.freeze(qi=qo_s4c0)
+        qo_s4c2 = self.stage4.conv2.freeze(qi=qo_s4c1)
+
+        qo_fc1 = self.fc1.freeze(qi=qo_s4c2)
+        qo_fc2 = self.fc2.freeze(qi=qo_fc1)
+        qo_fc3 = self.fc3.freeze(qi=qo_fc2)
+        self.qo = qo_fc3
 
     def quantize_inference_integer(self, x):
-        for stage_name in ['stage1', 'stage2', 'stage3', 'stage4']:
-            stage = getattr(self, stage_name)
-            x = self._quantize_inference_stage(x, stage)
+        # stage1
+        x = self.stage1.conv0(x)
+        x = self.stage1.relu0(x)
+        x = self.stage1.conv0.qo.quantize_tensor(x)
+        x = self.stage1.conv1.quantize_inference_integer(x)
+        x = self.stage1.relu1(x)
+        x = self.stage1.conv2.quantize_inference_integer(x)
+        x = self.stage1.relu2(x)
+        
+        # stage2
+        x = self.stage2.conv0.quantize_inference_integer(x)
+        x = self.stage2.relu0(x)
+        x = self.stage2.conv1.quantize_inference_integer(x)
+        x = self.stage2.relu1(x)
+        x = self.stage2.conv2.quantize_inference_integer(x)
+        x = self.stage2.relu2(x)
+
+        # stage3
+        x = self.stage3.conv0.quantize_inference_integer(x)
+        x = self.stage3.relu0(x)
+        x = self.stage3.conv1.quantize_inference_integer(x)
+        x = self.stage3.relu1(x)
+        x = self.stage3.conv2.quantize_inference_integer(x)
+        x = self.stage3.relu2(x)
+        x = self.stage3.conv3.quantize_inference_integer(x)
+        x = self.stage3.relu3(x)
+
+        # stage4
+        x = self.stage4.conv0.quantize_inference_integer(x)
+        x = self.stage4.relu0(x)
+        x = self.stage4.conv1.quantize_inference_integer(x)
+        x = self.stage4.relu1(x)
+        x = self.stage4.conv2.quantize_inference_integer(x)
+        x = self.stage4.relu2(x)
 
         x = torch.flatten(x, 1)
         
@@ -171,7 +198,7 @@ class TinyVGG(nn.Module):
         x = self.relu2(x)
         
         x = self.fc3.quantize_inference_integer(x)
-            
+        x = self.qo.dequantize_tensor(x)
         return x
 
 if __name__ == '__main__':
