@@ -89,7 +89,7 @@ class BasicBlock(nn.Module):
 
     def quantize_inference(self, x):
         identity = x
-        out = self.relu(self.conv1.quantize_inference(x))
+        out = F.relu(self.conv1.quantize_inference(x))
         out = self.conv2.quantize_inference(out)
 
         if self.downsample is not None:
@@ -102,7 +102,7 @@ class BasicBlock(nn.Module):
                 identity = self.downsample(x)
         
         out = self.add.quantize_inference(out, identity)
-        out = self.relu(out)
+        out = F.relu(out)
         return out
 
 class ResNet(nn.Module):

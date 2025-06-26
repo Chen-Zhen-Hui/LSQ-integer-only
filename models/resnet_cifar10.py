@@ -43,7 +43,7 @@ class BasicBlock(nn.Module):
         if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) > 0 and isinstance(self.shortcut[0], nn.Conv2d):
             original_conv_module = self.shortcut[0]
             self.shortcut[0] = QConv2d(original_conv_module, w_num_bits=w_num_bits, a_num_bits=a_num_bits, qi=False, qo=True)
-        self.add = QAdd(qi=False, q_shortcut=False, qo=True, num_bits=a_num_bits)
+        self.add = QAdd(qi=False, qo=True, num_bits=a_num_bits)
 
     def quantize_forward(self, x, qi=None):
         out = self.relu1(self.conv1(x, qi))
@@ -63,19 +63,31 @@ class BasicBlock(nn.Module):
         return self.qo
     
     def quantize_inference(self, x):
-        main_path_out = self.relu1(self.conv1.quantize_inference(x))
+        main_path_out = F.relu(self.conv1.quantize_inference(x))
         main_path_out = self.conv2.quantize_inference(main_path_out)
 
         if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) > 0 and isinstance(self.shortcut[0], QConv2d):
             shortcut_out = self.shortcut[0].quantize_inference(x)
-        else: # Identity shortcut
+        else:
             shortcut_out = x
         out = self.add.quantize_inference(main_path_out, shortcut_out)
-        out = self.relu2(out)
+        out = F.relu(out)
+        return out
+    
+    def quantize_inference_integer(self, x):
+        main_path_out = F.relu(self.conv1.quantize_inference_integer(x))
+        main_path_out = self.conv2.quantize_inference_integer(main_path_out)
+
+        if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) > 0 and isinstance(self.shortcut[0], QConv2d):
+            shortcut_out = self.shortcut[0].quantize_inference_integer(x)
+        else:
+            shortcut_out = x
+        out = self.add.quantize_inference_integer(main_path_out, shortcut_out)
+        out = F.relu(out)
         return out
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block:BasicBlock, num_blocks:list[int], num_classes:int=10):
         super(ResNet, self).__init__()
         self.in_planes = 64
         
@@ -87,7 +99,6 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         fc_in_features = 512 * 16
         self.linear = nn.Linear(fc_in_features, num_classes)
 
@@ -158,30 +169,21 @@ class ResNet(nn.Module):
         self.qo = self.linear.freeze(qi=qo)
         return self.qo
 
-    def quantize_inference(self, x):
-        out = self.relu1(self.conv1(x))
+    def quantize_inference_integer(self, x):
+        out = F.relu(self.conv1(x))
         out = self.conv1.qo.quantize_tensor(out)
         current_input = out
         for layer_name in ['layer1', 'layer2', 'layer3', 'layer4']:
             layer_sequential = getattr(self, layer_name)
             for block in layer_sequential:
+                # current_input = block.quantize_inference_integer(current_input)
                 current_input = block.quantize_inference(current_input)
         out = current_input
         out = out.view(out.size(0), -1)
+        # out = self.linear.quantize_inference_integer(out)
         out = self.linear.quantize_inference(out)
+        out = self.qo.dequantize_tensor(out)
         return out
 
 def ResNet18_CIFAR10(num_classes=10):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
-
-if __name__ == '__main__':
-    model = ResNet18_CIFAR10()
-    print("Floating-point ResNet-18 for CIFAR-10 created successfully.")
-    print(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
-
-    dummy_input = torch.randn(2, 3, 32, 32) # Batch size 2, 3 channels, 32x32 image
-    output = model(dummy_input)
-    print(f"Output shape: {output.shape}")
-    model.quantize(num_bits=4)
-    q_output = model(dummy_input)
-    print(f"Output shape: {q_output.shape}")

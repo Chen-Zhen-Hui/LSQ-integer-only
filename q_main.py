@@ -119,7 +119,7 @@ def main():
                         help='Image size (default: 32)')
     parser.add_argument('--num-classes', type=int, default=10,
                         help='Number of classes (default: 10)')
-
+    parser.add_argument('--resume', action='store_true', help='Resume training from latest checkpoint')
     args = parser.parse_args()
     print(args)
     out_dir = os.path.join(args.log_dir, args.dataset, f'{args.model}_w{args.w_num_bits}a{args.a_num_bits}')
@@ -142,16 +142,16 @@ def main():
     print("Initializing model for W{}A{} quantization...".format(args.w_num_bits, args.a_num_bits))
     if args.model == 'resnet_cifar10':
         model = ResNet18_CIFAR10(num_classes=args.num_classes).to(device)
-        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu', weights_only=True)['net']
     elif args.model == 'tiny_vgg':
         model = TinyVGG(image_size=args.image_size, num_classes=args.num_classes)
-        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu', weights_only=True)['net']
     elif args.model == 'resnet18':
         model = ResNet18(num_classes=args.num_classes, image_size=args.image_size).to(device)
-        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu', weights_only=True)['net']
     elif args.model == 'resnet34':
         model = ResNet34(num_classes=args.num_classes, image_size=args.image_size).to(device)
-        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu')['net']
+        state_dict = torch.load(f'./logs/{args.dataset}/{args.model}/checkpoint_max.pth', map_location='cpu', weights_only=True)['net']
     else:
         raise ValueError(f"Network {args.model} not supported.")
 
@@ -175,8 +175,19 @@ def main():
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     print("Starting W{}A{} quantization-aware training...".format(args.w_num_bits, args.a_num_bits))
-    max_test_acc = 0
-    for epoch in range(1, args.epochs + 1):
+
+    if args.resume:
+        checkpoint = torch.load(os.path.join(out_dir, f'checkpoint_max.pth'))
+        model.load_state_dict(checkpoint['net'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['lr_scheduler'])
+        start_epoch = checkpoint['epoch']
+        max_test_acc = checkpoint['max_test_acc']
+    else:
+        start_epoch = 1
+        max_test_acc = 0
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss, train_acc, train_speed = train(model, device, train_loader, optimizer, criterion)
         test_loss, test_acc, test_speed = test(model, device, test_loader, criterion)
         scheduler.step()

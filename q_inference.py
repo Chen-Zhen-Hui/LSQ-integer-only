@@ -1,13 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import argparse
-from torch.utils.tensorboard import SummaryWriter
 import time
 from datasets import get_data_loader
 from models.resnet_cifar10 import ResNet18_CIFAR10
 from models.tiny_vgg import TinyVGG
 import os
+from tqdm import tqdm
 
 def q_inference(model, device, test_loader, criterion):
     model.eval()
@@ -18,7 +17,7 @@ def q_inference(model, device, test_loader, criterion):
     start_time = time.time()
     
     with torch.no_grad():
-        for data, target in test_loader:
+        for data, target in tqdm(test_loader, desc="Inference", unit="batch"):
             data, target = data.to(device), target.to(device)
             total_test_samples += data.size(0)
             output = model.quantize_inference_integer(data)
@@ -83,7 +82,7 @@ def main():
     print(f"Quantizing model to W{args.w_num_bits}A{args.a_num_bits}...")
     model.quantize(w_num_bits=args.w_num_bits, a_num_bits=args.a_num_bits)
     print("Model quantized.")
-    state_dict = torch.load(f'./qat_logs/{args.dataset}/{args.model}_w{args.w_num_bits}a{args.a_num_bits}/checkpoint_max.pth', map_location='cpu')['net']
+    state_dict = torch.load(f'./qat_logs/{args.dataset}/{args.model}_w{args.w_num_bits}a{args.a_num_bits}/checkpoint_max.pth', map_location='cpu', weights_only=True)['net']
     model.load_state_dict(state_dict)
     model.to(device)
     model.freeze()
@@ -91,7 +90,7 @@ def main():
     with torch.no_grad():
         q_inference(model, device, test_loader, criterion)
 
-    print("Quantization-aware inference finished.")
+    print("Quantization integer-only inference finished.")
 
 
 if __name__ == '__main__':

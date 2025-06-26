@@ -140,7 +140,7 @@ class QModule(nn.Module):
             self.qi = QParam(num_bits=num_bits)
         if qo:
             self.qo = QParam(num_bits=num_bits)
-
+            
     def freeze(self):
         pass
 
@@ -214,7 +214,7 @@ class QConv2d(QModule):
 
         self.conv_module.weight.data = self.qw.quantize_tensor(self.conv_module.weight.data)
         if self.conv_module.bias is not None:
-            if hasattr(self, 'qi') and hasattr(self, 'qw'): # Ensure scales are available
+            if hasattr(self, 'qi') and hasattr(self, 'qw'):
                 bias_scale = self.qi.alpha * self.qw.alpha
                 if bias_scale.item() != 0:
                     self.conv_module.bias.data = quantize_tensor(self.conv_module.bias.data, scale=bias_scale, num_bits=32)
@@ -237,6 +237,7 @@ class QConv2d(QModule):
         x = F.conv2d(x, self.conv_module.weight, self.conv_module.bias,
                      self.conv_module.stride, self.conv_module.padding, 
                      self.conv_module.dilation, self.conv_module.groups)
+        x.clamp_(-2**15, 2**15-1)
         x = x*self.M0.data.item()/2**self.n.data.item()
         x = round_ste_for_inference(x)
         x.clamp_(-2**(self.qo.num_bits-1), 2**(self.qo.num_bits-1)-1)
@@ -321,13 +322,14 @@ class QLinear(QModule):
 
     def quantize_inference_integer(self, x):
         x = F.linear(x, self.linear_module.weight, self.linear_module.bias)
+        x.clamp_(-2**15, 2**15-1)
         x = x*self.M0.data.item()/2**self.n.data.item()
         x = round_ste_for_inference(x)
         x.clamp_(-2**(self.qo.num_bits-1), 2**(self.qo.num_bits-1)-1)
         return x
     
 class QAdd(QModule):
-    def __init__(self, num_bits, qi=False, q_shortcut=False, qo=True):
+    def __init__(self, num_bits, qi=False, qo=True):
         super(QAdd, self).__init__(qi=qi, qo=qo, num_bits=num_bits)
         if qo:
             self.qo = QParam(num_bits=num_bits)
@@ -357,7 +359,7 @@ class QAdd(QModule):
         
         M, n_val = search(1 / self.qi.alpha.data.item())
         M_shortcut, n_shortcut_val = search(1 / self.q_shortcut.alpha.data.item())
-        Mo, no_val = search(self.qo.alpha.data.item() / (self.qi.alpha.data.item()*self.q_shortcut.alpha.data.item()))
+        Mo, no_val = search((self.qi.alpha.data.item()*self.q_shortcut.alpha.data.item()) / self.qo.alpha.data.item())
         self.M.data = torch.tensor(M, dtype=torch.float)
         self.n.data = torch.tensor(n_val, dtype=torch.float)
         self.M_shortcut.data = torch.tensor(M_shortcut, dtype=torch.float)
@@ -368,23 +370,20 @@ class QAdd(QModule):
         return self.qo
 
     def quantize_inference(self, x, shortcut):
-        x = x * self.M.data.item() + shortcut * self.M_shortcut.data.item()
-        x = round_ste_for_inference(x)
-        x = x * self.Mo.data.item()
-        if self.qo.num_bits > 1:
-            x.clamp_(-2**(self.qo.num_bits-1), 2**(self.qo.num_bits-1)-1)
-        else:
-            x.clamp_(0, 1)
+        x = self.qi.dequantize_tensor(x)+self.q_shortcut.dequantize_tensor(shortcut)
+        x = self.qo.quantize_tensor(x)
         return x
 
     def quantize_inference_integer(self, x, shortcut):
         x = x * self.M.data.item() / 2**self.n.data.item()
         s = shortcut * self.M_shortcut.data.item() / 2**self.n_shortcut.data.item()
         x = round_ste_for_inference(x)+round_ste_for_inference(s)
+        x.clamp_(-2**15, 2**15-1)
         x = x * self.Mo.data.item() / 2**self.no.data.item()
+        # x = self.qi.dequantize_tensor(x)+self.q_shortcut.dequantize_tensor(shortcut)
+        # x = self.qo.quantize_tensor(x)
         if self.qo.num_bits > 1:
             x.clamp_(-2**(self.qo.num_bits-1), 2**(self.qo.num_bits-1)-1)
         else:
             x.clamp_(0, 1)
         return x
-    

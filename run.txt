@@ -8,11 +8,17 @@ python main.py -d imagenet      --model resnet18        --image-size 224   --num
 python main.py -d imagenet      --model resnet34        --image-size 224   --num-classes 1000  -b 512 -e 100 --cuda 2 -lr 0.01
 
 
+
 python q_main.py -d tiny-imagenet --model tiny_vgg          --image-size 64  --num-classes 200   -w 4 -a 4 -e 20
-python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 4 -a 4 -e 20 -cuda 1 -lr 0.01
-python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 8 -a 8 -e 20 -cuda 1 -lr 0.01
+python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 4 -a 4 -e 20    -cuda 1 -lr 0.01
+python q_main.py -d cifar10       --model tiny_vgg          --image-size 32  --num-classes 10    -w 8 -a 8 -e 20    -cuda 1 -lr 0.01
+python q_main.py -d imagenet      --model tiny_vgg          --image-size 128 --num-classes 1000  -w 4 -a 8 -e 100   -cuda 2 -lr 0.001 --resume 
 
 
-python q_main.py -d cifar10       --model resnet_cifar10    --image-size 32  --num-classes 10    -w 4 -a 4 -e 20 -cuda 0 -lr 0.01
+python q_main.py -d cifar10       --model resnet_cifar10    --image-size 32  --num-classes 10    -w 8 -a 8 -e 20 -cuda 0 -lr 0.01
+
 
 python q_inference.py -d cifar10  --model tiny_vgg          --image-size 32  --num-classes 10    -w 8 -a 8 -cuda 1
+python q_inference.py -d imagenet --model tiny_vgg          --image-size 128 --num-classes 1000  -w 4 -a 6 -cuda 3
+
+python q_inference.py -d cifar10  --model resnet_cifar10    --image-size 32  --num-classes 10    -w 8 -a 8 -cuda 1
