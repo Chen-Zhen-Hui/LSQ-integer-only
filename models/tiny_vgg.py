@@ -26,11 +26,11 @@ class TinyVGG(nn.Module):
             self.feature_size = self._forward_conv(dummy_data).view(-1).shape[0]
         self.dp1 = nn.Dropout(0.5)
         self.dp2 = nn.Dropout(0.5)
-        self.fc1 = nn.Linear(self.feature_size, fc_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-        self.fc2 = nn.Linear(fc_channels, fc_channels)
-        self.relu2 = nn.ReLU(inplace=True)
-        self.fc3 = nn.Linear(fc_channels, num_classes)
+        self.fc1 = nn.Linear(self.feature_size, 512)
+        self.relu1 = nn.ReLU6(inplace=True)
+        self.fc2 = nn.Linear(512, 1024)
+        self.relu2 = nn.ReLU6(inplace=True)
+        self.fc3 = nn.Linear(1024, num_classes)
 
         # initialize weights
         for m in self.modules():
@@ -56,7 +56,7 @@ class TinyVGG(nn.Module):
 
             stage.add_module(f'conv{index}', conv)
             stage.add_module(f'bn{index}', nn.BatchNorm2d(out_channels))
-            stage.add_module(f'relu{index}', nn.ReLU(inplace=True))
+            stage.add_module(f'relu{index}', nn.ReLU6(inplace=True))
         return stage
 
     def _forward_conv(self, x):
@@ -156,46 +156,46 @@ class TinyVGG(nn.Module):
     def quantize_inference_integer(self, x):
         # stage1
         x = self.stage1.conv0(x)
-        x = self.stage1.relu0(x)
+        x = F.relu(x)
         x = self.stage1.conv0.qo.quantize_tensor(x)
         x = self.stage1.conv1.quantize_inference_integer(x)
-        x = self.stage1.relu1(x)
+        x = F.relu(x)
         x = self.stage1.conv2.quantize_inference_integer(x)
-        x = self.stage1.relu2(x)
+        x = F.relu(x)
         
         # stage2
         x = self.stage2.conv0.quantize_inference_integer(x)
-        x = self.stage2.relu0(x)
+        x = F.relu(x)
         x = self.stage2.conv1.quantize_inference_integer(x)
-        x = self.stage2.relu1(x)
+        x = F.relu(x)
         x = self.stage2.conv2.quantize_inference_integer(x)
-        x = self.stage2.relu2(x)
+        x = F.relu(x)
 
         # stage3
         x = self.stage3.conv0.quantize_inference_integer(x)
-        x = self.stage3.relu0(x)
+        x = F.relu(x)
         x = self.stage3.conv1.quantize_inference_integer(x)
-        x = self.stage3.relu1(x)
+        x = F.relu(x)
         x = self.stage3.conv2.quantize_inference_integer(x)
-        x = self.stage3.relu2(x)
+        x = F.relu(x)
         x = self.stage3.conv3.quantize_inference_integer(x)
-        x = self.stage3.relu3(x)
+        x = F.relu(x)
 
         # stage4
         x = self.stage4.conv0.quantize_inference_integer(x)
-        x = self.stage4.relu0(x)
+        x = F.relu(x)
         x = self.stage4.conv1.quantize_inference_integer(x)
-        x = self.stage4.relu1(x)
+        x = F.relu(x)
         x = self.stage4.conv2.quantize_inference_integer(x)
-        x = self.stage4.relu2(x)
+        x = F.relu(x)
 
         x = torch.flatten(x, 1)
         
         x = self.fc1.quantize_inference_integer(x)
-        x = self.relu1(x)
+        x = F.relu(x)
         
         x = self.fc2.quantize_inference_integer(x)
-        x = self.relu2(x)
+        x = F.relu(x)
         
         x = self.fc3.quantize_inference_integer(x)
         x = self.qo.dequantize_tensor(x)
