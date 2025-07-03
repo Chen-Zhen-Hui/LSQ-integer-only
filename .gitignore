@@ -3,3 +3,4 @@ qat_logs/
 dd.ipynb
 .vscode/
 __pycache__/
+.env
