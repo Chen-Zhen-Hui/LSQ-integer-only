@@ -2,6 +2,6 @@ logs/
 qat_logs/
 datasets.py
 __pycache__/
-*.ipynb
+dd.ipynb
 .vscode/
 __pycache__/
