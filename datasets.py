@@ -1,5 +1,5 @@
 from torchvision import datasets, transforms
-from torch.utils.data import ConcatDataset
+from torch.utils.data import DistributedSampler
 import torch
 import os
 
@@ -42,14 +42,14 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
         else:
             raise ValueError('input size of imagenet should be 128 or 224')
         if distributed:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,
-                                                                            num_replicas=world_size,
-                                                                            rank=rank,
-                                                                            )
-            val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, 
-                                                                            num_replicas=world_size,
-                                                                            rank=rank,
-                                                                            )
+            train_sampler = DistributedSampler(train_dataset,
+                                              num_replicas=world_size,
+                                              rank=rank,
+                                              )
+            val_sampler = DistributedSampler(val_dataset, 
+                                            num_replicas=world_size,
+                                            rank=rank,
+                                            )
         else:
             train_sampler = None
             val_sampler = None
