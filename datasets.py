@@ -2,12 +2,14 @@ from torchvision import datasets, transforms
 from torch.utils.data import DistributedSampler
 import torch
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 
 def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, distributed=False, world_size=None, rank=0):
     if dataset_type=='imagenet':
-        data_root = '/pm981a/xuhr/dataset/ImageNet/'
+        data_root = os.environ.get('IMAGENET_ROOT', '')
         traindir = os.path.join(data_root, 'train')
         valdir = os.path.join(data_root, 'val')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -62,7 +64,7 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
             val_dataset, batch_size=test_batch_size,
             num_workers=4, pin_memory=True, sampler=val_sampler)
     elif dataset_type=='tiny-imagenet':
-        data_root = "/pm981a/xuhr/dataset/tiny-imagenet-200/"
+        data_root = os.environ.get('TINYIMAGENET_ROOT', '')
         transform = {
             'train': transforms.Compose([
                 transforms.RandomResizedCrop(img_size),
@@ -82,7 +84,7 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
         val_data = datasets.ImageFolder(root=data_root+'/val', transform=transform['val'])
         test_loader = torch.utils.data.DataLoader(val_data, batch_size=test_batch_size, shuffle=False)
     elif dataset_type=='cifar10':
-        data_root = '/barracuda_2T/chenzh/cifar10/'
+        data_root = os.environ.get('CIFAR10_ROOT', '')
         transform_train = transforms.Compose(
             [
                 transforms.RandomCrop(32, padding=4),
@@ -108,35 +110,6 @@ def get_data_loader(dataset_type, img_size, train_batch_size, test_batch_size, d
     return train_loader, test_loader
 
 if __name__ == '__main__':
-    import shutil
-    import random
-
-    # ImageNet验证集图片目录
-    val_dir = '/hdd_raid5/xuhr/ImageNet/val'
-    # 目标目录
-    target_dir = 'imgs'
-
-    # 创建目标目录
-    os.makedirs(target_dir, exist_ok=True)
-
-    # 获取所有图片文件名
-    all_imgs = []
-    for root, dirs, files in os.walk(val_dir):
-        for f in files:
-            if f.lower().endswith('.jpeg'):
-                all_imgs.append(os.path.join(root, f))
-
-    print(f"val目录下图片数量: {len(all_imgs)}")
-
-    if len(all_imgs) < 100:
-        print(f"警告：val目录下只有{len(all_imgs)}张图片，全部复制。")
-        sample_imgs = all_imgs
-    else:
-        sample_imgs = random.sample(all_imgs, 100)
-
-    for img_path in sample_imgs:
-        img_name = os.path.basename(img_path)
-        dst = os.path.join(target_dir, img_name)
-        shutil.copy(img_path, dst)
-
-    print(f"已复制{len(sample_imgs)}张图片到imgs目录。")
+    print(os.environ.get('IMAGENET_ROOT'))
+    print(os.environ.get('TINYIMAGENET_ROOT'))
+    print(os.environ.get('CIFAR10_ROOT'))
