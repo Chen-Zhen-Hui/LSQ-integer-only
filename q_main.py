@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import argparse
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter
 import time
 from datasets import get_data_loader
 from models.resnet_cifar10 import ResNet18_CIFAR10
@@ -96,7 +96,7 @@ def test_float(model, device, test_loader, criterion):
     print(f"Float model Test:  Loss={avg_test_loss:.4f}, Acc={accuracy:.2f}%, Speed={test_samples_per_second:.2f} samples/sec")
 
 def main():
-    parser = argparse.ArgumentParser(description='LSQ W4A4 Quantization Training')
+    parser = argparse.ArgumentParser(description='LSQ Training')
     parser.add_argument('-b','--batch-size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 128)')
     parser.add_argument('-tb','--test-batch-size', type=int, default=1000, metavar='N',
@@ -161,10 +161,9 @@ def main():
 
     print("Fusing Batch Norm layers...")
     model.eval()
-    # test_float(model, device, test_loader, criterion)
     model.fuse_bn()
     print("BN layers fused.")
-    test_float(model, device, test_loader, criterion)
+    # test_float(model, device, test_loader, criterion)
 
     print(f"Quantizing model to W{args.w_num_bits}A{args.a_num_bits}...")
     model.quantize(w_num_bits=args.w_num_bits, a_num_bits=args.a_num_bits)
@@ -177,16 +176,22 @@ def main():
     print("Starting W{}A{} quantization-aware training...".format(args.w_num_bits, args.a_num_bits))
 
     if args.resume:
-        checkpoint = torch.load(os.path.join(out_dir, f'checkpoint_max.pth'))
+        checkpoint = torch.load(os.path.join(out_dir, f'checkpoint_max.pth'), weights_only=True)
         model.load_state_dict(checkpoint['net'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['lr_scheduler'])
-        start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch']+1
         max_test_acc = checkpoint['max_test_acc']
+        print(f"Start epoch: {start_epoch}")
+        print(f"Max test acc: {max_test_acc}")
+        print(f"Last lr: {scheduler.get_last_lr()}")
+        print(f"Param group lr: {optimizer.param_groups[0]['lr']}")
+        test_loss, test_acc, test_speed = test(model, device, test_loader, criterion)
+        print(f"Test:  Loss={test_loss:.4f}, Acc={test_acc:.2f}%, Speed={test_speed:.2f} samples/sec")
     else:
         start_epoch = 1
         max_test_acc = 0
-
+    
     for epoch in range(start_epoch, args.epochs + 1):
         train_loss, train_acc, train_speed = train(model, device, train_loader, optimizer, criterion)
         test_loss, test_acc, test_speed = test(model, device, test_loader, criterion)
