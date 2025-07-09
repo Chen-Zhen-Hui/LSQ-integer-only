@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import argparse
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 import time
 from datasets import get_data_loader
@@ -142,7 +142,7 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    scaler = GradScaler(device='cuda', enabled=use_amp_effective)
+    scaler = GradScaler(enabled=use_amp_effective)
 
     print("Starting training...")
     max_test_acc = 0
